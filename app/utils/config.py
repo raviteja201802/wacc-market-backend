@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     default_history_years: int = 5
     request_timeout_seconds: int = 30
     yahoo_retry_count: int = 2
+    nse_backfill_days: int = 30
+    nse_request_pause_seconds: float = 0.2
     allowed_origins: list[str] = ["*"]
 
     @property

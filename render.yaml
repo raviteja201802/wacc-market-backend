@@ -13,3 +13,5 @@ services:
         value: "0"
       - key: DEFAULT_HISTORY_YEARS
         value: "5"
+      - key: NSE_BACKFILL_DAYS
+        value: "30"

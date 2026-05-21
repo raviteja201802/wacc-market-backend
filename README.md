@@ -15,7 +15,7 @@ Users do not install Python, maintain tickers, or manually enter company data.
 Excel workbook
   -> Power Query / Office Script refresh
   -> FastAPI cloud backend
-  -> NSE + Yahoo Finance market data engine
+  -> NSE bhavcopy market data engine
   -> Append-only Excel database generator
   -> Refreshed Excel sheets
 ```
@@ -29,6 +29,7 @@ wacc_market_backend/
     api/routes.py
     services/
       universe_service.py
+      nse_price_service.py
       price_service.py
       excel_service.py
       validation_service.py
@@ -78,11 +79,12 @@ If `PRICE_HISTORY` exceeds Excel's row limit, the generated workbook splits it i
 - The NSE universe is fetched from NSE's downloadable equity CSV.
 - New listings are detected automatically and appended to `COMPANY_MASTER`.
 - Delisting candidates are marked inactive when absent from the latest NSE universe.
-- Active companies are mapped to Yahoo Finance tickers using `.NS`.
+- Daily equity prices are fetched from NSE bhavcopy files. This is the primary price source.
+- Active companies are matched by `NSESymbol`; generated tickers retain the `.NS` suffix for downstream compatibility.
 - Daily prices are append-only. Existing historical rows are retained.
-- The backend fetches only missing trading days after the latest stored date.
+- The backend fetches missing bhavcopy dates after the latest stored price date.
 - Exact duplicate `(Date, Ticker)` and `(Date, IndexTicker)` rows are removed.
-- One failed ticker does not stop the run. Failed tickers are logged in `UPDATE_LOG`.
+- One failed trading day does not stop the run. Failed bhavcopy dates are logged in `UPDATE_LOG`.
 - Before each refresh, the prior workbook is backed up as `WACC_MARKET_DATABASE_backup_YYYYMMDD_HHMMSS.xlsx`.
 
 ## Local Development
@@ -103,7 +105,7 @@ http://127.0.0.1:8000/refresh-market-data
 http://127.0.0.1:8000/download-excel
 ```
 
-For quick testing, set `MAX_COMPANY_REFRESH=5` in `.env` so the first run does not download every NSE company.
+For quick testing, set `MAX_COMPANY_REFRESH=10` and `NSE_BACKFILL_DAYS=7` in `.env`. For production, set `MAX_COMPANY_REFRESH=0` and increase `NSE_BACKFILL_DAYS` gradually.
 
 ## Render Deployment
 
@@ -123,6 +125,8 @@ Recommended environment variables:
 ```text
 MAX_COMPANY_REFRESH=0
 DEFAULT_HISTORY_YEARS=5
+NSE_BACKFILL_DAYS=30
+NSE_REQUEST_PAUSE_SECONDS=0.2
 REQUEST_TIMEOUT_SECONDS=30
 YAHOO_RETRY_COUNT=2
 ```
@@ -185,8 +189,8 @@ For large datasets, prefer JSON endpoints or future SQLite/PostgreSQL storage in
 
 ## Production Notes
 
-- NSE and Yahoo Finance endpoints can occasionally throttle or change behavior. The service caches the last successful company universe and logs failed tickers.
+- NSE endpoints can occasionally throttle or change behavior. The service caches the last successful company universe and logs failed bhavcopy dates.
+- Yahoo Finance remains in the dependency list for market index and risk-free-rate fallback paths, not for primary NSE equity price history.
 - For institutional production, move primary storage to PostgreSQL and generate Excel as an output artifact.
 - Keep the append-only price history as the audit trail. Remove exact duplicates only.
 - Validate risk-free-rate values before using them in signed valuation reports.
-

@@ -13,7 +13,8 @@ from app.services.excel_service import (
     utc_now,
     write_workbook,
 )
-from app.services.price_service import update_market_index, update_price_history
+from app.services.nse_price_service import update_price_history_from_nse
+from app.services.price_service import update_market_index
 from app.services.riskfree_service import update_risk_free_rate
 from app.services.universe_service import refresh_company_master
 from app.services.validation_service import run_validation_checks
@@ -51,7 +52,7 @@ def refresh_everything() -> dict:
     sheets["COMPANY_MASTER"] = company_master
     sheets["UNIVERSE_SNAPSHOT"] = snapshot
 
-    price_history, price_failed, price_added = update_price_history(company_master)
+    price_history, price_failed, price_added = update_price_history_from_nse(company_master)
     sheets["PRICE_HISTORY"] = price_history
     failed.extend(price_failed)
     records_added += price_added
@@ -77,7 +78,7 @@ def refresh_everything() -> dict:
         records_added=records_added,
         new_companies=len(new_listings),
         failed=failed,
-        notes=f"Inactive/delisted candidates: {len(delistings)}",
+        notes=f"Price source: NSE bhavcopy. Inactive/delisted candidates: {len(delistings)}",
     )
     workbook_path = write_workbook(sheets)
     return {
@@ -200,4 +201,3 @@ def sheet_data(sheet_name: str):
         raise HTTPException(status_code=404, detail=f"Unknown sheet {sheet_name}")
     df = read_sheet(normalized)
     return df.fillna("").to_dict(orient="records")
-
