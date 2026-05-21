@@ -137,6 +137,25 @@ def missing_bhavcopy_dates(existing: pd.DataFrame) -> list[date]:
     return [start + timedelta(days=offset) for offset in range((today - start).days + 1)]
 
 
+def latest_available_bhavcopy_date() -> date | None:
+    today = date.today()
+    for offset in range(settings.nse_latest_scan_days + 1):
+        candidate = today - timedelta(days=offset)
+        try:
+            download_bhavcopy(candidate)
+            return candidate
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logger.info("Latest NSE bhavcopy scan skipped %s: %s", candidate, exc)
+        sleep(settings.nse_request_pause_seconds)
+    return None
+
+
+def filter_active_symbols(rows: pd.DataFrame, active_symbols: set[str]) -> pd.DataFrame:
+    return rows[rows["NSESymbol"].isin(active_symbols)].copy()
+
+
 def update_price_history_from_nse(company_master: pd.DataFrame) -> tuple[pd.DataFrame, list[str], int]:
     existing = read_sheet("PRICE_HISTORY")
     active_symbols = set(
@@ -150,25 +169,40 @@ def update_price_history_from_nse(company_master: pd.DataFrame) -> tuple[pd.Data
     frames = [existing]
     failed_dates: list[str] = []
     total_added = 0
+    skipped_dates = 0
 
     for for_date in missing_bhavcopy_dates(existing):
         try:
             raw = download_bhavcopy(for_date)
             rows = normalize_bhavcopy(raw, for_date)
-            rows = rows[rows["NSESymbol"].isin(active_symbols)].copy()
+            rows = filter_active_symbols(rows, active_symbols)
             if rows.empty:
                 continue
             total_added += len(rows)
             frames.append(rows)
         except FileNotFoundError:
+            skipped_dates += 1
             continue
         except Exception as exc:
             failed_dates.append(f"NSE_BHAVCOPY_{for_date.isoformat()}")
             logger.warning("NSE price update failed for %s: %s", for_date, exc)
         sleep(settings.nse_request_pause_seconds)
 
+    if total_added == 0 and existing.empty:
+        latest = latest_available_bhavcopy_date()
+        if latest:
+            raw = download_bhavcopy(latest)
+            rows = filter_active_symbols(normalize_bhavcopy(raw, latest), active_symbols)
+            total_added += len(rows)
+            frames.append(rows)
+            logger.info("Seeded price history from latest available NSE bhavcopy: %s", latest)
+        else:
+            failed_dates.append(f"NSE_NO_BHAVCOPY_FOUND_LAST_{settings.nse_latest_scan_days}_DAYS")
+
+    if skipped_dates:
+        logger.info("Skipped %s missing/non-trading NSE bhavcopy dates", skipped_dates)
+
     combined = pd.concat(frames, ignore_index=True)
     combined = combined.drop_duplicates(subset=["Date", "Ticker"], keep="last")
     combined = combined.sort_values(["Ticker", "Date"]).reset_index(drop=True)
     return combined, failed_dates, total_added
-

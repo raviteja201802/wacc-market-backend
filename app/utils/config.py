@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 30
     yahoo_retry_count: int = 2
     nse_backfill_days: int = 30
+    nse_latest_scan_days: int = 120
     nse_request_pause_seconds: float = 0.2
     allowed_origins: list[str] = ["*"]
 

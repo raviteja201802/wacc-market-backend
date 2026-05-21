@@ -15,3 +15,5 @@ services:
         value: "5"
       - key: NSE_BACKFILL_DAYS
         value: "30"
+      - key: NSE_LATEST_SCAN_DAYS
+        value: "120"
