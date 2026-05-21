@@ -13,7 +13,7 @@ from app.services.excel_service import (
     utc_now,
     write_workbook,
 )
-from app.services.nse_price_service import update_price_history_from_nse
+from app.services.nse_price_service import nse_price_diagnostics, update_price_history_from_nse
 from app.services.price_service import update_market_index
 from app.services.riskfree_service import update_risk_free_rate
 from app.services.universe_service import refresh_company_master
@@ -168,6 +168,14 @@ def latest_update_log(limit: int = 20):
     if log.empty:
         return []
     return log.tail(limit).fillna("").to_dict(orient="records")
+
+
+@router.get("/debug-nse-price")
+def debug_nse_price():
+    company_master = read_sheet("COMPANY_MASTER")
+    if company_master.empty:
+        company_master, _, _, _ = refresh_company_master()
+    return nse_price_diagnostics(company_master)
 
 
 @router.get("/download-excel")

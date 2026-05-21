@@ -153,7 +153,11 @@ def latest_available_bhavcopy_date() -> date | None:
 
 
 def filter_active_symbols(rows: pd.DataFrame, active_symbols: set[str]) -> pd.DataFrame:
-    return rows[rows["NSESymbol"].isin(active_symbols)].copy()
+    normalized_active = {str(symbol).strip().upper() for symbol in active_symbols}
+    rows = rows.copy()
+    rows["NSESymbol"] = rows["NSESymbol"].astype(str).str.strip().str.upper()
+    rows["Ticker"] = rows["NSESymbol"] + ".NS"
+    return rows[rows["NSESymbol"].isin(normalized_active)].copy()
 
 
 def update_price_history_from_nse(company_master: pd.DataFrame) -> tuple[pd.DataFrame, list[str], int]:
@@ -161,7 +165,7 @@ def update_price_history_from_nse(company_master: pd.DataFrame) -> tuple[pd.Data
     active_symbols = set(
         company_master[
             company_master["ActiveStatus"].astype(str).str.lower().eq("active")
-        ]["NSESymbol"].astype(str).str.strip()
+        ]["NSESymbol"].astype(str).str.strip().str.upper()
     )
     if settings.max_company_refresh > 0:
         active_symbols = set(list(active_symbols)[: settings.max_company_refresh])
@@ -192,10 +196,17 @@ def update_price_history_from_nse(company_master: pd.DataFrame) -> tuple[pd.Data
         latest = latest_available_bhavcopy_date()
         if latest:
             raw = download_bhavcopy(latest)
-            rows = filter_active_symbols(normalize_bhavcopy(raw, latest), active_symbols)
+            normalized_rows = normalize_bhavcopy(raw, latest)
+            rows = filter_active_symbols(normalized_rows, active_symbols)
+            if rows.empty:
+                failed_dates.append(
+                    f"NSE_BHAVCOPY_{latest.isoformat()}_ZERO_COMPANY_MATCHES_"
+                    f"RAW_ROWS_{len(normalized_rows)}_ACTIVE_SYMBOLS_{len(active_symbols)}"
+                )
             total_added += len(rows)
-            frames.append(rows)
-            logger.info("Seeded price history from latest available NSE bhavcopy: %s", latest)
+            if not rows.empty:
+                frames.append(rows)
+                logger.info("Seeded price history from latest available NSE bhavcopy: %s", latest)
         else:
             failed_dates.append(f"NSE_NO_BHAVCOPY_FOUND_LAST_{settings.nse_latest_scan_days}_DAYS")
 
@@ -206,3 +217,33 @@ def update_price_history_from_nse(company_master: pd.DataFrame) -> tuple[pd.Data
     combined = combined.drop_duplicates(subset=["Date", "Ticker"], keep="last")
     combined = combined.sort_values(["Ticker", "Date"]).reset_index(drop=True)
     return combined, failed_dates, total_added
+
+
+def nse_price_diagnostics(company_master: pd.DataFrame) -> dict:
+    active_symbols = set(
+        company_master[
+            company_master["ActiveStatus"].astype(str).str.lower().eq("active")
+        ]["NSESymbol"].astype(str).str.strip().str.upper()
+    )
+    latest = latest_available_bhavcopy_date()
+    if not latest:
+        return {
+            "status": "not_found",
+            "scan_days": settings.nse_latest_scan_days,
+            "active_symbols": len(active_symbols),
+        }
+    raw = download_bhavcopy(latest)
+    normalized = normalize_bhavcopy(raw, latest)
+    matched = filter_active_symbols(normalized, active_symbols)
+    sample_symbols = normalized["NSESymbol"].head(10).tolist()
+    sample_active = sorted(list(active_symbols))[:10]
+    return {
+        "status": "found",
+        "latest_bhavcopy_date": latest.isoformat(),
+        "raw_rows": len(raw),
+        "normalized_equity_rows": len(normalized),
+        "active_symbols": len(active_symbols),
+        "matched_rows": len(matched),
+        "sample_bhavcopy_symbols": sample_symbols,
+        "sample_active_symbols": sample_active,
+    }
