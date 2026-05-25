@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import RLock
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -24,6 +25,7 @@ from app.utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
+workbook_lock = RLock()
 
 
 def append_log(sheets, task, status, records_added=0, records_updated=0, new_companies=0, failed=None, notes=""):
@@ -125,7 +127,8 @@ def health():
 @router.get("/refresh-market-data")
 def refresh_market_data():
     try:
-        return refresh_everything()
+        with workbook_lock:
+            return refresh_everything()
     except Exception as exc:
         logger.exception("Refresh failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -133,19 +136,20 @@ def refresh_market_data():
 
 @router.get("/refresh-universe")
 def refresh_universe():
-    backup_workbook()
-    sheets = load_all_sheets()
-    master, new_listings, delistings, snapshot = refresh_company_master()
-    sheets["COMPANY_MASTER"] = master
-    sheets["UNIVERSE_SNAPSHOT"] = snapshot
-    append_log(
-        sheets,
-        task="refresh-universe",
-        status="SUCCESS",
-        new_companies=len(new_listings),
-        notes=f"Inactive/delisted candidates: {len(delistings)}",
-    )
-    write_workbook(sheets)
+    with workbook_lock:
+        backup_workbook()
+        sheets = load_all_sheets()
+        master, new_listings, delistings, snapshot = refresh_company_master()
+        sheets["COMPANY_MASTER"] = master
+        sheets["UNIVERSE_SNAPSHOT"] = snapshot
+        append_log(
+            sheets,
+            task="refresh-universe",
+            status="SUCCESS",
+            new_companies=len(new_listings),
+            notes=f"Inactive/delisted candidates: {len(delistings)}",
+        )
+        write_workbook(sheets)
     return {
         "status": "success",
         "new_companies_added": len(new_listings),
@@ -155,16 +159,18 @@ def refresh_universe():
 
 @router.get("/run-validation")
 def run_validation():
-    sheets = load_all_sheets()
-    sheets["DATA_QUALITY_CHECKS"] = run_validation_checks(sheets)
-    append_log(sheets, task="run-validation", status="SUCCESS")
-    write_workbook(sheets)
-    return sheets["DATA_QUALITY_CHECKS"].fillna("").to_dict(orient="records")
+    with workbook_lock:
+        sheets = load_all_sheets()
+        sheets["DATA_QUALITY_CHECKS"] = run_validation_checks(sheets)
+        append_log(sheets, task="run-validation", status="SUCCESS")
+        write_workbook(sheets)
+        return sheets["DATA_QUALITY_CHECKS"].fillna("").to_dict(orient="records")
 
 
 @router.get("/latest-update-log")
 def latest_update_log(limit: int = 20):
-    log = read_sheet("UPDATE_LOG")
+    with workbook_lock:
+        log = read_sheet("UPDATE_LOG")
     if log.empty:
         return []
     return log.tail(limit).fillna("").to_dict(orient="records")
@@ -181,8 +187,9 @@ def debug_nse_price():
 @router.get("/download-excel")
 def download_excel():
     path: Path = settings.workbook_path
-    if not path.exists():
-        refresh_everything()
+    with workbook_lock:
+        if not path.exists():
+            refresh_everything()
     return FileResponse(
         path,
         filename=settings.workbook_name,
@@ -207,24 +214,25 @@ def sheet_data(sheet_name: str):
     }
     if normalized not in allowed:
         raise HTTPException(status_code=404, detail=f"Unknown sheet {sheet_name}")
-    df = read_sheet(normalized)
-    if normalized == "PRICE_HISTORY" and df.empty:
-        sheets = load_all_sheets()
-        company_master = sheets.get("COMPANY_MASTER", empty_frame("COMPANY_MASTER"))
-        if company_master.empty:
-            company_master, _, _, snapshot = refresh_company_master()
-            sheets["COMPANY_MASTER"] = company_master
-            sheets["UNIVERSE_SNAPSHOT"] = snapshot
-        price_history, failed, added = update_price_history_from_nse(company_master)
-        sheets["PRICE_HISTORY"] = price_history
-        append_log(
-            sheets,
-            task="price-history-self-heal",
-            status="SUCCESS_WITH_WARNINGS" if failed else "SUCCESS",
-            records_added=added,
-            failed=failed,
-            notes="Triggered by /data/PRICE_HISTORY because saved sheet was empty",
-        )
-        write_workbook(sheets)
-        df = price_history
+    with workbook_lock:
+        df = read_sheet(normalized)
+        if normalized == "PRICE_HISTORY" and df.empty:
+            sheets = load_all_sheets()
+            company_master = sheets.get("COMPANY_MASTER", empty_frame("COMPANY_MASTER"))
+            if company_master.empty:
+                company_master, _, _, snapshot = refresh_company_master()
+                sheets["COMPANY_MASTER"] = company_master
+                sheets["UNIVERSE_SNAPSHOT"] = snapshot
+            price_history, failed, added = update_price_history_from_nse(company_master)
+            sheets["PRICE_HISTORY"] = price_history
+            append_log(
+                sheets,
+                task="price-history-self-heal",
+                status="SUCCESS_WITH_WARNINGS" if failed else "SUCCESS",
+                records_added=added,
+                failed=failed,
+                notes="Triggered by /data/PRICE_HISTORY because saved sheet was empty",
+            )
+            write_workbook(sheets)
+            df = price_history
     return df.fillna("").to_dict(orient="records")
