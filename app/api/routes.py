@@ -208,4 +208,23 @@ def sheet_data(sheet_name: str):
     if normalized not in allowed:
         raise HTTPException(status_code=404, detail=f"Unknown sheet {sheet_name}")
     df = read_sheet(normalized)
+    if normalized == "PRICE_HISTORY" and df.empty:
+        sheets = load_all_sheets()
+        company_master = sheets.get("COMPANY_MASTER", empty_frame("COMPANY_MASTER"))
+        if company_master.empty:
+            company_master, _, _, snapshot = refresh_company_master()
+            sheets["COMPANY_MASTER"] = company_master
+            sheets["UNIVERSE_SNAPSHOT"] = snapshot
+        price_history, failed, added = update_price_history_from_nse(company_master)
+        sheets["PRICE_HISTORY"] = price_history
+        append_log(
+            sheets,
+            task="price-history-self-heal",
+            status="SUCCESS_WITH_WARNINGS" if failed else "SUCCESS",
+            records_added=added,
+            failed=failed,
+            notes="Triggered by /data/PRICE_HISTORY because saved sheet was empty",
+        )
+        write_workbook(sheets)
+        df = price_history
     return df.fillna("").to_dict(orient="records")
